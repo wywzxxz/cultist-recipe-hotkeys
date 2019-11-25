@@ -13,22 +13,7 @@ namespace CultistRecipeHotkeys
     [BepInEx.BepInPlugin("net.robophreddev.CultistSimulator.CultistRecipeHotkeys", "CultistRecipeHotkeys", "0.0.1")]
     public class CultistRecipeHotkeysMod : BepInEx.BaseUnityPlugin
     {
-        readonly KeyCode[] RecipeKeys = new KeyCode[] {
-            KeyCode.F1,
-            KeyCode.F2,
-            KeyCode.F3,
-            KeyCode.F4,
-            KeyCode.F5,
-            KeyCode.F6,
-            KeyCode.F7,
-            KeyCode.F8,
-            KeyCode.F9,
-            KeyCode.F10,
-            KeyCode.F11,
-            KeyCode.F12,
-        };
-
-        readonly Dictionary<int, RecipeConfig> RecipesByHotkeyIndex = new Dictionary<int, RecipeConfig>();
+        Dictionary<string, RecipeConfig> Recipes = new Dictionary<string, RecipeConfig>();
 
         private TabletopTokenContainer TabletopTokenContainer
         {
@@ -50,82 +35,79 @@ namespace CultistRecipeHotkeys
         {
             this.Logger.LogInfo("CultistHotbar initialized.");
         }
-
+        long startTime = DateTime.Now.Ticks;   
         void Update()
         {
-            for (var i = 0; i < RecipeKeys.Length; i++)
+            //检测操作相关的操作
+            try
             {
-                var key = RecipeKeys[i];
-                if (Input.GetKeyDown(key))
+                var situation = this.GetOpenSituation();//当没打开situation时这个函数会报错
+                if (!TabletopManager.IsInMansus() && situation != null)
                 {
-                    var storeRecipe = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-                    if (storeRecipe)
+                    var Situation = situation.GetTokenId();
+                    if (Input.GetKeyDown(KeyCode.F1) && situation.SituationClock.State == SituationState.Unstarted) //保存配方
                     {
-                        this.StoreRecipe(i);
+                        if (!Recipes.ContainsKey(Situation)) Recipes[Situation] = new RecipeConfig();
+                        this.StoreRecipe(Recipes[Situation]);
+                        this.Notify("automation", "Recipe added");
                     }
-                    else
+                    if (Input.GetKeyDown(KeyCode.F2))//取消配方
                     {
-                        var executeRecipe = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-                        this.RestoreRecipe(i, executeRecipe);
+                        Recipes.Remove(Situation);
+                        SoundManager.PlaySfx("CardDragFail");
+                        this.Notify("automation", "Recipe canceled");
                     }
-
-                    return;
+                    if (Input.GetKeyDown(KeyCode.F3)) //调试用：立即执行该配方
+                    {
+                        this.Logger.LogError("F3");
+                        this.RestoreRecipe(Recipes[Situation], true);
+                    }
                 }
+            }catch(Exception e)
+            {
+            }
+            //自动执行
+            if (DateTime.Now.Ticks -this.startTime> 10000*100)
+            {
+                startTime = DateTime.Now.Ticks;                
+                foreach (var item in Recipes.ToList())
+                {
+
+                    this.RestoreRecipe(item.Value, true);
+                }
+                startTime = DateTime.Now.Ticks;
             }
         }
 
-        void StoreRecipe(int index)
-        {
+        void StoreRecipe(RecipeConfig recipe)
+        {            
             if (TabletopManager.IsInMansus())
             {
                 return;
             }
-
             var situation = this.GetOpenSituation();
             if (situation == null)
             {
                 return;
             }
-
-            if (situation.SituationClock.State != SituationState.Unstarted)
-            {
-                this.Notify("I cannot remember this", "Memory only serves to start the unstarted.");
-                return;
-            }
-
             var slots = situation.situationWindow.GetStartingSlots();
             var elements = slots.Select(x => ValidRecipeSlotOrNull(x)).Select(x => x?.GetElementStackInSlot()?.EntityId);
 
-            this.RecipesByHotkeyIndex[index] = new RecipeConfig
-            {
-                Situation = situation.GetTokenId(),
-                RecipeElements = elements.ToArray()
-            };
-
-            this.Notify("Repetition breeds familiarity", "I will remember this recipe for later.");
+            recipe.Situation = situation.GetTokenId();
+            recipe.RecipeElements = elements.ToArray();                  
         }
 
-        void RestoreRecipe(int index, bool executeOnRestore)
-        {
-            if (TabletopManager.IsInMansus())
-            {
-                return;
-            }
-
-            RecipeConfig recipe;
-            if (!this.RecipesByHotkeyIndex.TryGetValue(index, out recipe))
-            {
-                return;
-            }
-
+        void RestoreRecipe(RecipeConfig recipe, bool executeOnRestore)
+        {            
             var situation = this.GetSituation(recipe.Situation);
             if (situation == null)
             {
                 return;
-            }
-
+            }            
+            this.Logger.LogError("  " + situation.SituationClock.State);
             switch (situation.SituationClock.State)
             {
+                //case SituationState.RequiringExecution:
                 case SituationState.Complete:
                     situation.situationWindow.DumpAllResultingCardsToDesktop();
                     break;
@@ -133,20 +115,21 @@ namespace CultistRecipeHotkeys
                     situation.situationWindow.DumpAllStartingCardsToDesktop();
                     break;
                 default:
-                    SoundManager.PlaySfx("CardDragFail");
-                    this.Notify("I am busy", "I cannot start a recipe while I am busy doing somthing else.");
+                    //SoundManager.PlaySfx("CardDragFail");
+                    //this.Notify("I am busy", "I cannot start a recipe while I am busy doing somthing else.");
                     return;
             }
 
             // The first slot is the primary slot, so slot it independently.
             //  A successful slot here may cause new slots to be added.
             var primaryElement = recipe.RecipeElements.FirstOrDefault();
+            //if (primaryElement == null) return;//针对无卡
             if (primaryElement != null)
             {
                 var slot = situation.situationWindow.GetStartingSlots().FirstOrDefault();
                 if (!slot || !this.TryPopulateSlot(slot, primaryElement))
                 {
-                    this.Notify("Something is missing", "I cannot start this recipe, as I am missing a critical component.");
+                    //this.Notify("Something is missing", "I cannot start this recipe, as I am missing a critical component.");
                     return;
                 }
             }
@@ -167,6 +150,7 @@ namespace CultistRecipeHotkeys
                 if (situation.SituationClock.State == SituationState.Unstarted)
                 {
                     this.Notify("Something went wrong", "I could not start the recipe.");
+                    this.Logger.LogError("I could not start the recipe.");
                     situation.OpenWindow();
                 }
 
@@ -230,7 +214,7 @@ namespace CultistRecipeHotkeys
         }
 
         SituationController GetSituation(string entityId)
-        {
+        {            
             var situation = Registry.Retrieve<SituationsCatalogue>().GetRegisteredSituations().FirstOrDefault(x => x.situationToken.EntityId == entityId);
             var token = situation.situationToken as SituationToken;
             if (token.Defunct || token.IsBeingAnimated)
@@ -243,7 +227,9 @@ namespace CultistRecipeHotkeys
 
         SituationController GetOpenSituation()
         {
-            var situation = Registry.Retrieve<SituationsCatalogue>().GetOpenSituation();
+            var sc = Registry.Retrieve<SituationsCatalogue>();
+            if (sc == null) return null;
+            var situation = sc.GetOpenSituation();
             var token = situation.situationToken as SituationToken;
             if (token.Defunct || token.IsBeingAnimated)
             {
@@ -259,7 +245,7 @@ namespace CultistRecipeHotkeys
         }
     }
 
-    struct RecipeConfig
+    class RecipeConfig
     {
         public string Situation;
         public string[] RecipeElements;

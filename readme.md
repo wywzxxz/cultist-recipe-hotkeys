@@ -1,3 +1,12 @@
+twist a little to free my finger. Now mod will automaticly repeat task forever
+
+F1: save recipe and run (forever)
+
+F2: cancle recipt (and stop)
+
+↓↓↓↓↓↓↓↓↓↓↓↓↓ORIGINAL README↓↓↓↓↓↓↓↓↓↓↓
+
+
 # Cultist Recipe Hotkeys
 
 This is a mod for Cultist Simulator that adds the ability to create hotkeys for "recipes" inside situation windows.
